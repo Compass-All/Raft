@@ -1,0 +1,88 @@
+diff --git a/Makefile b/Makefile
+index 7cfc502..e779c8f 100644
+--- a/Makefile
++++ b/Makefile
+@@ -66,7 +66,7 @@ debian-riscv64/rootfs.tar.gz:
+ 
+ linux: linux-stable/arch/riscv/boot/Image
+ 
+-CROSS_COMPILE_LINUX = /usr/bin/riscv64-linux-gnu-
++CROSS_COMPILE_LINUX = riscv64-unknown-linux-gnu-
+ 
+ linux-patch: patches/linux.patch patches/fpga-axi-sdc.c patches/fpga-axi-eth.c patches/linux.config
+ 	if [ -s patches/linux.patch ] ; then cd linux-stable && ( git apply -R --check ../patches/linux.patch 2>/dev/null || git apply ../patches/linux.patch ) ; fi
+@@ -115,7 +115,7 @@ u-boot/u-boot-nodtb.bin: u-boot-patch $(U_BOOT_SRC)
+ 	make -C u-boot CROSS_COMPILE=$(CROSS_COMPILE_LINUX) BOARD=vivado_riscv64 vivado_riscv64_config
+ 	make -C u-boot \
+ 	  BOARD=vivado_riscv64 \
+-	  CC=$(CROSS_COMPILE_LINUX)gcc-8 \
++	  CC=$(CROSS_COMPILE_LINUX)gcc \
+ 	  CROSS_COMPILE=$(CROSS_COMPILE_LINUX) \
+ 	  KCFLAGS='-O1 -gno-column-info' \
+ 	  all
+diff --git a/ethernet/verilog-ethernet b/ethernet/verilog-ethernet
+--- a/ethernet/verilog-ethernet
++++ b/ethernet/verilog-ethernet
+@@ -1 +1 @@
+-Subproject commit 85e4f1d8ba657cebf0f91971a486c6121365c1a4
++Subproject commit 85e4f1d8ba657cebf0f91971a486c6121365c1a4-dirty
+diff --git a/generators/gemmini b/generators/gemmini
+--- a/generators/gemmini
++++ b/generators/gemmini
+@@ -1 +1 @@
+-Subproject commit 87550581d98210540ac013f96fbcb9150be39df7
++Subproject commit 87550581d98210540ac013f96fbcb9150be39df7-dirty
+diff --git a/generators/riscv-boom b/generators/riscv-boom
+--- a/generators/riscv-boom
++++ b/generators/riscv-boom
+@@ -1 +1 @@
+-Subproject commit ad64c5419151e5e886daee7084d8399713b46b4b
++Subproject commit ad64c5419151e5e886daee7084d8399713b46b4b-dirty
+diff --git a/generators/sifive-cache b/generators/sifive-cache
+--- a/generators/sifive-cache
++++ b/generators/sifive-cache
+@@ -1 +1 @@
+-Subproject commit a260c905acc3645a49583f1c304f1a83025a860b
++Subproject commit a260c905acc3645a49583f1c304f1a83025a860b-dirty
+diff --git a/linux-stable b/linux-stable
+--- a/linux-stable
++++ b/linux-stable
+@@ -1 +1 @@
+-Subproject commit 07e0b709cab7dc987b5071443789865e20481119
++Subproject commit 07e0b709cab7dc987b5071443789865e20481119-dirty
+diff --git a/opensbi b/opensbi
+--- a/opensbi
++++ b/opensbi
+@@ -1 +1 @@
+-Subproject commit 48f91ee9c960f048c4a7d1da4447d31e04931e38
++Subproject commit 48f91ee9c960f048c4a7d1da4447d31e04931e38-dirty
+diff --git a/rocket-chip b/rocket-chip
+--- a/rocket-chip
++++ b/rocket-chip
+@@ -1 +1 @@
+-Subproject commit 1bd43fe1f154c0d180e1dd8be4b62602ce160045
++Subproject commit 1bd43fe1f154c0d180e1dd8be4b62602ce160045-dirty
+diff --git a/src/main/scala/rocket.scala b/src/main/scala/rocket.scala
+index e9e3eba..2d1d0d7 100644
+--- a/src/main/scala/rocket.scala
++++ b/src/main/scala/rocket.scala
+@@ -115,11 +115,13 @@ class Rocket32s16 extends Config(
+ class Rocket64b1 extends Config(
+   new WithNBreakpoints(8) ++
+   new WithNBigCores(1)    ++
++  new KomodoBaseConfig ++
+   new RocketBaseConfig)
+ 
+ class Rocket64b2 extends Config(
+   new WithNBreakpoints(8) ++
+   new WithNBigCores(2)    ++
++  new KomodoBaseConfig ++
+   new RocketBaseConfig)
+ 
+ /* With exposed BSCAN port - the name must end with 'e' */
+diff --git a/u-boot b/u-boot
+--- a/u-boot
++++ b/u-boot
+@@ -1 +1 @@
+-Subproject commit d637294e264adfeb29f390dfc393106fd4d41b17
++Subproject commit d637294e264adfeb29f390dfc393106fd4d41b17-dirty

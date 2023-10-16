@@ -1,0 +1,83 @@
+diff --git a/include/sbi/riscv_encoding.h b/include/sbi/riscv_encoding.h
+index 8a29f8e..2583539 100644
+--- a/include/sbi/riscv_encoding.h
++++ b/include/sbi/riscv_encoding.h
+@@ -87,6 +87,7 @@
+ #define IRQ_M_EXT			11
+ #define IRQ_S_GEXT			12
+ #define IRQ_PMU_OVF			13
++#define IRQ_COP				13
+ 
+ #define MIP_SSIP			(_UL(1) << IRQ_S_SOFT)
+ #define MIP_VSSIP			(_UL(1) << IRQ_VS_SOFT)
+@@ -99,6 +100,7 @@
+ #define MIP_MEIP			(_UL(1) << IRQ_M_EXT)
+ #define MIP_SGEIP			(_UL(1) << IRQ_S_GEXT)
+ #define MIP_LCOFIP			(_UL(1) << IRQ_PMU_OVF)
++#define MIP_MCIP            (_UL(1) << IRQ_COP)
+ 
+ #define SIP_SSIP			MIP_SSIP
+ #define SIP_STIP			MIP_STIP
+diff --git a/lib/sbi/sbi_hart.c b/lib/sbi/sbi_hart.c
+index d9a15d9..9d098dc 100644
+--- a/lib/sbi/sbi_hart.c
++++ b/lib/sbi/sbi_hart.c
+@@ -107,7 +107,7 @@ static int delegate_traps(struct sbi_scratch *scratch)
+ 		return 0;
+ 
+ 	/* Send M-mode interrupts and most exceptions to S-mode */
+-	interrupts = MIP_SSIP | MIP_STIP | MIP_SEIP;
++	interrupts = MIP_SSIP | MIP_STIP | MIP_SEIP | MIP_MCIP;
+ 	if (sbi_hart_has_feature(scratch, SBI_HART_HAS_SSCOFPMF))
+ 		interrupts |= MIP_LCOFIP;
+ 
+@@ -134,6 +134,8 @@ static int delegate_traps(struct sbi_scratch *scratch)
+ 	}
+ 
+ 	csr_write(CSR_MIDELEG, interrupts);
++	// sbi_printf("[DEBUG]: interrupts = %lx\n", interrupts);
++	// sbi_printf("[DEBUG]: CSR_MIDELEG = %lx\n", csr_read(CSR_MIDELEG));
+ 	csr_write(CSR_MEDELEG, exceptions);
+ 
+ 	return 0;
+diff --git a/lib/sbi/sbi_init.c b/lib/sbi/sbi_init.c
+index 83043c5..12ec256 100644
+--- a/lib/sbi/sbi_init.c
++++ b/lib/sbi/sbi_init.c
+@@ -73,7 +73,7 @@ static void sbi_boot_print_general(struct sbi_scratch *scratch)
+ 		return;
+ 
+ 	/* Platform details */
+-	sbi_printf("Platform Name             : %s\n",
++	sbi_printf("Our Modified Platform Name             : %s\n",
+ 		   sbi_platform_name(plat));
+ 	sbi_platform_get_features_str(plat, str, sizeof(str));
+ 	sbi_printf("Platform Features         : %s\n", str);
+@@ -301,6 +301,14 @@ static void __noreturn init_coldboot(struct sbi_scratch *scratch, u32 hartid)
+ 		sbi_hart_hang();
+ 	}
+ 
++	sbi_printf("[DEBUG]: CSR_MIDELEG = %lx\n", csr_read(CSR_MIDELEG));
++	sbi_printf("[DEBUG]: CSR_MSTATUS = %lx\n", csr_read(CSR_MSTATUS));
++	sbi_printf("[DEBUG]: CSR_SSTATUS = %lx\n", csr_read(CSR_SSTATUS));
++	sbi_printf("[DEBUG]: CSR_MIE = %lx\n", csr_read(CSR_MIE));
++	sbi_printf("[DEBUG]: CSR_SIE = %lx\n", csr_read(CSR_SIE));
++	sbi_printf("[DEBUG]: CSR_MIP = %lx\n", csr_read(CSR_MIP));
++	sbi_printf("[DEBUG]: CSR_SIP = %lx\n", csr_read(CSR_SIP));
++
+ 	/*
+ 	 * Note: Finalize domains after HSM initialization so that we
+ 	 * can startup non-root domains.
+diff --git a/lib/sbi/sbi_ipi.c b/lib/sbi/sbi_ipi.c
+index 1014909..8d31aa0 100644
+--- a/lib/sbi/sbi_ipi.c
++++ b/lib/sbi/sbi_ipi.c
+@@ -264,7 +264,7 @@ int sbi_ipi_init(struct sbi_scratch *scratch, bool cold_boot)
+ 		return ret;
+ 
+ 	/* Enable software interrupts */
+-	csr_set(CSR_MIE, MIP_MSIP);
++	csr_set(CSR_MIE, MIP_MSIP | MIP_MCIP);
+ 
+ 	return 0;
+ }

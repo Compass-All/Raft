@@ -1,0 +1,570 @@
+diff --git a/arch/riscv/Kconfig b/arch/riscv/Kconfig
+index 00fd9c548f26..0436c74cf0d1 100644
+--- a/arch/riscv/Kconfig
++++ b/arch/riscv/Kconfig
+@@ -239,7 +239,6 @@ config ARCH_RV64I
+ 	select HAVE_FTRACE_MCOUNT_RECORD if !XIP_KERNEL
+ 	select HAVE_FUNCTION_GRAPH_TRACER
+ 	select HAVE_FUNCTION_TRACER if !XIP_KERNEL
+-	select SWIOTLB if MMU
+ 
+ endchoice
+ 
+diff --git a/arch/riscv/kernel/process.c b/arch/riscv/kernel/process.c
+index 504b496787aa..f0db10576c6b 100644
+--- a/arch/riscv/kernel/process.c
++++ b/arch/riscv/kernel/process.c
+@@ -96,6 +96,7 @@ void start_thread(struct pt_regs *regs, unsigned long pc,
+ 		 */
+ 		fstate_restore(current, regs);
+ 	}
++	regs->status |= SR_XS_INITIAL;
+ 	regs->epc = pc;
+ 	regs->sp = sp;
+ }
+diff --git a/drivers/irqchip/irq-riscv-intc.c b/drivers/irqchip/irq-riscv-intc.c
+index b65bd8878d4f..ddd30f7bd8bf 100644
+--- a/drivers/irqchip/irq-riscv-intc.c
++++ b/drivers/irqchip/irq-riscv-intc.c
+@@ -6,6 +6,9 @@
+  */
+ 
+ #define pr_fmt(fmt) "riscv-intc: " fmt
++#define INTERRUPT_CAUSE_ROCC        13
++#define SHADOW_BASE 0x87000000l
++#define SHADOW_SIZE 0x100
+ #include <linux/atomic.h>
+ #include <linux/bits.h>
+ #include <linux/cpu.h>
+@@ -16,6 +19,9 @@
+ #include <linux/module.h>
+ #include <linux/of.h>
+ #include <linux/smp.h>
++#include <linux/sched/signal.h>
++#include <linux/varanus.h>
++#include <asm/io.h>
+ 
+ static struct irq_domain *intc_domain;
+ 
+@@ -36,6 +42,39 @@ static asmlinkage void riscv_intc_irq(struct pt_regs *regs)
+ 		handle_IPI(regs);
+ 		break;
+ #endif
++    case INTERRUPT_CAUSE_ROCC:
++		komodo_resume();
++		printk("[MAIN CORE]: Handle a RoCC interrupt ...\n");
++		unsigned int data = *(unsigned long*)phys_to_virt(SHADOW_BASE);
++		// printk("[DEBUG]: data = %x\n", data);
++		if (data == 0)
++		{
++			unsigned long varanus_done;
++			varanus_done= 0;
++			komodo_done_info(varanus_done);
++			printk("[MAIN CORE]: Catch varanus_done = %ld\n", varanus_done);
++			int i = 0;
++			while (varanus_done != 0) {
++				i = 0;
++				while (i < 10000) {
++					i++;
++					asm volatile ("slli x0, x1, 0");
++				}
++				komodo_done_info(varanus_done);
++			}
++			komodo_done_info(varanus_done);
++			// printk("[DEBUG]: Varanus done, varanus_done = %ld\n", varanus_done);
++		}
++		else{
++			struct pid * this_pid = find_vpid(current->pid);
++			if (NULL != this_pid){
++				printk("[MAIN CORE]: Catch a sink, pc =  %x\n", data);
++				// printk("[DEBUG]: nr = %d, pid = %d, comm = %s\n", this_pid->numbers[this_pid->level].nr, current->pid, current->comm);
++				int kill_status = kill_pid(this_pid, SIGKILL, 1);
++				// printk("[DEBUG]: kill_status = %d\n", kill_status);
++			}
++		}
++      	break;
+ 	default:
+ 		generic_handle_domain_irq(intc_domain, cause);
+ 		break;
+@@ -61,13 +100,13 @@ static void riscv_intc_irq_unmask(struct irq_data *d)
+ 
+ static int riscv_intc_cpu_starting(unsigned int cpu)
+ {
+-	csr_set(CSR_IE, BIT(RV_IRQ_SOFT));
++	csr_set(CSR_IE, BIT(RV_IRQ_SOFT) | BIT(INTERRUPT_CAUSE_ROCC));
+ 	return 0;
+ }
+ 
+ static int riscv_intc_cpu_dying(unsigned int cpu)
+ {
+-	csr_clear(CSR_IE, BIT(RV_IRQ_SOFT));
++	csr_clear(CSR_IE, BIT(RV_IRQ_SOFT) | BIT(INTERRUPT_CAUSE_ROCC));
+ 	return 0;
+ }
+ 
+@@ -94,7 +133,7 @@ static const struct irq_domain_ops riscv_intc_domain_ops = {
+ 
+ static int __init riscv_intc_init(struct device_node *node,
+ 				  struct device_node *parent)
+-{
++{	
+ 	int rc, hartid;
+ 
+ 	hartid = riscv_of_parent_hartid(node);
+diff --git a/drivers/mmc/host/Kconfig b/drivers/mmc/host/Kconfig
+index af6c3c329076..435b09de7088 100644
+--- a/drivers/mmc/host/Kconfig
++++ b/drivers/mmc/host/Kconfig
+@@ -1084,6 +1084,14 @@ config MMC_SDHCI_AM654
+ 
+ 	  If unsure, say N.
+ 
++config FPGA_AXI_SDC
++	tristate "FPGA AXI SD Card Controller"
++	help
++	  This selects the FPGA AXI SD Card controller. If you have
++	  a FPGA development board with SD or MMC devices, say Y or M here.
++
++	  If unsure, say N.
++
+ config MMC_OWL
+ 	tristate "Actions Semi Owl SD/MMC Host Controller support"
+ 	depends on HAS_DMA
+diff --git a/drivers/mmc/host/Makefile b/drivers/mmc/host/Makefile
+index 4e4ceb32c4b4..d67ddd8eec40 100644
+--- a/drivers/mmc/host/Makefile
++++ b/drivers/mmc/host/Makefile
+@@ -70,6 +70,7 @@ obj-$(CONFIG_MMC_SUNXI)		+= sunxi-mmc.o
+ obj-$(CONFIG_MMC_USDHI6ROL0)	+= usdhi6rol0.o
+ obj-$(CONFIG_MMC_TOSHIBA_PCI)	+= toshsd.o
+ obj-$(CONFIG_MMC_BCM2835)	+= bcm2835.o
++obj-$(CONFIG_FPGA_AXI_SDC)	+= fpga-axi-sdc.o
+ obj-$(CONFIG_MMC_OWL)		+= owl-mmc.o
+ 
+ obj-$(CONFIG_MMC_REALTEK_PCI)	+= rtsx_pci_sdmmc.o
+diff --git a/drivers/net/ethernet/Kconfig b/drivers/net/ethernet/Kconfig
+index 827993022386..58b6cd140202 100644
+--- a/drivers/net/ethernet/Kconfig
++++ b/drivers/net/ethernet/Kconfig
+@@ -159,6 +159,14 @@ config ETHOC
+ 	help
+ 	  Say Y here if you want to use the OpenCores 10/100 Mbps Ethernet MAC.
+ 
++config FPGA_AXI_ETH
++	tristate "FPGA AXI Ethernet controller"
++	help
++	  This selects the FPGA AXI Ethernet controller. If you have
++	  a FPGA development board with Ethernet phy, say Y or M here.
++
++	  If unsure, say N.
++
+ source "drivers/net/ethernet/packetengines/Kconfig"
+ source "drivers/net/ethernet/pasemi/Kconfig"
+ source "drivers/net/ethernet/pensando/Kconfig"
+diff --git a/drivers/net/ethernet/Makefile b/drivers/net/ethernet/Makefile
+index 8ef43e0c33c0..3da632fc888b 100644
+--- a/drivers/net/ethernet/Makefile
++++ b/drivers/net/ethernet/Makefile
+@@ -72,6 +72,7 @@ obj-$(CONFIG_NET_VENDOR_NVIDIA) += nvidia/
+ obj-$(CONFIG_LPC_ENET) += nxp/
+ obj-$(CONFIG_NET_VENDOR_OKI) += oki-semi/
+ obj-$(CONFIG_ETHOC) += ethoc.o
++obj-$(CONFIG_FPGA_AXI_ETH) += fpga-axi-eth.o
+ obj-$(CONFIG_NET_VENDOR_PACKET_ENGINES) += packetengines/
+ obj-$(CONFIG_NET_VENDOR_PASEMI) += pasemi/
+ obj-$(CONFIG_NET_VENDOR_QLOGIC) += qlogic/
+diff --git a/drivers/tty/serial/Kconfig b/drivers/tty/serial/Kconfig
+index 6949e883ffab..9cd5ed766f8c 100644
+--- a/drivers/tty/serial/Kconfig
++++ b/drivers/tty/serial/Kconfig
+@@ -538,6 +538,32 @@ config SERIAL_UARTLITE_NR_UARTS
+ 	  Set this to the number of uartlites in your system, or the number
+ 	  you think you might implement.
+ 
++config SERIAL_AXI_UART
++       tristate "FPGA AXI serial port support"
++       depends on HAS_IOMEM
++       select SERIAL_CORE
++       help
++         Say Y here if you want to use the FPGA AXI serial controller.
++
++config SERIAL_AXI_UART_CONSOLE
++       bool "Support for console on FPGA AXI serial port"
++       depends on SERIAL_AXI_UART=y
++       select SERIAL_CORE_CONSOLE
++       select SERIAL_EARLYCON
++       help
++         Say Y here if you wish to use a FPGA AXI as the system
++         console (the system console is the device which receives all kernel
++         messages and warnings and which allows logins in single user mode).
++
++config SERIAL_AXI_UART_PORTS
++       int "Maximum number of FPGA AXI serial ports"
++       depends on SERIAL_AXI_UART
++       range 1 256
++       default 1
++       help
++         Set this to the number of FPGA AXI UARTs in your system, or the number
++         you think you might implement.
++
+ config SERIAL_SUNCORE
+ 	bool
+ 	depends on SPARC
+diff --git a/drivers/tty/serial/Makefile b/drivers/tty/serial/Makefile
+index 61cc8de95571..af6044473f93 100644
+--- a/drivers/tty/serial/Makefile
++++ b/drivers/tty/serial/Makefile
+@@ -54,6 +54,7 @@ obj-$(CONFIG_SERIAL_TXX9) += serial_txx9.o
+ obj-$(CONFIG_SERIAL_VR41XX) += vr41xx_siu.o
+ obj-$(CONFIG_SERIAL_ATMEL) += atmel_serial.o
+ obj-$(CONFIG_SERIAL_UARTLITE) += uartlite.o
++obj-$(CONFIG_SERIAL_AXI_UART) += fpga-axi-uart.o
+ obj-$(CONFIG_SERIAL_MSM) += msm_serial.o
+ obj-$(CONFIG_SERIAL_QCOM_GENI) += qcom_geni_serial.o
+ obj-$(CONFIG_SERIAL_OMAP) += omap-serial.o
+diff --git a/fs/Makefile b/fs/Makefile
+index 93b80529f8e8..12703fc2995a 100644
+--- a/fs/Makefile
++++ b/fs/Makefile
+@@ -14,7 +14,7 @@ obj-y :=	open.o read_write.o file_table.o super.o \
+ 		attr.o bad_inode.o file.o filesystems.o namespace.o \
+ 		seq_file.o xattr.o libfs.o fs-writeback.o \
+ 		pnode.o splice.o sync.o utimes.o d_path.o \
+-		stack.o fs_struct.o statfs.o fs_pin.o nsfs.o \
++		stack.o fs_struct.o statfs.o fs_pin.o nsfs.o komodo.o \
+ 		fs_types.o fs_context.o fs_parser.o fsopen.o init.o \
+ 		kernel_read_file.o remap_range.o
+ 
+diff --git a/fs/exec.c b/fs/exec.c
+index a9f5acf8f0ec..ddd4aaa84ebd 100644
+--- a/fs/exec.c
++++ b/fs/exec.c
+@@ -23,6 +23,9 @@
+  * formats.
+  */
+ 
++#define SHADOW_BASE 0x87000000l
++#define SHADOW_SIZE 0x100
++
+ #include <linux/kernel_read_file.h>
+ #include <linux/slab.h>
+ #include <linux/file.h>
+@@ -75,6 +78,9 @@
+ 
+ #include <trace/events/sched.h>
+ 
++#include <linux/varanus.h>
++#include <asm/io.h>
++
+ static int bprm_creds_from_file(struct linux_binprm *bprm);
+ 
+ int suid_dumpable = 0;
+@@ -1838,6 +1844,17 @@ static int bprm_execve(struct linux_binprm *bprm,
+ 	if (retval < 0)
+ 		goto out;
+ 
++	/* PHMon: begin */
++    if (!current->monitor_init & 
++	((strcmp(current->comm, "t1.riscv") == 0) || (strcmp(current->comm, "t2.riscv") == 0) || (strcmp(current->comm, "t3.riscv") == 0)|| (strcmp(current->comm, "t4.riscv") == 0) || (strcmp(current->comm, "t5.riscv") == 0)))
++	{
++      current->monitor_init = true;
++      current->monitor_enable = true;
++      current->maintain_state = false;
++      current->local1 = 0;
++    }
++    /* PHMon: end*/
++
+ 	/* execve succeeded */
+ 	current->fs->in_exec = 0;
+ 	current->in_execve = 0;
+@@ -2089,7 +2106,44 @@ SYSCALL_DEFINE3(execve,
+ 		const char __user *const __user *, argv,
+ 		const char __user *const __user *, envp)
+ {
+-	return do_execve(getname(filename), argv, envp);
++	/* PHMon: begin */
++	int res = do_execve(getname(filename), argv, envp);
++	if (current->monitor_enable) {
++		unsigned int data = 0;
++		printk("[DEBUG]: This is our modified linux kernel!\n");
++		unsigned int *shadow = ioremap(SHADOW_BASE, SHADOW_SIZE);
++		data = *(unsigned long*)phys_to_virt(SHADOW_BASE);
++		printk("[DEBUG]: Read physical address 0x87000000: %x\n", data);
++		memset(shadow, 0, SHADOW_SIZE);
++		data = *(unsigned long*)phys_to_virt(SHADOW_BASE);
++		printk("[DEBUG]: Read physical address 0x87000000: %x\n", data);
++		iounmap(shadow);
++    
++		komodo_reset_all();
++		asm volatile ("nop");
++		current->local1 = vm_mmap(NULL, 0, 10*PAGE_SIZE, 0x3, 0x2 , 0);
++		current->local2 = (current->local1);
++		current->local3 = 0;
++		current->local4 = 0;
++		current->local5 = 0;
++		current->local6 = 0;
++		mm_populate(current->local1, 10*PAGE_SIZE);
++    
++		komodo_set_local_reg(0, (current->local1));
++		komodo_set_local_reg(1, (current->local1));
++		komodo_set_local_reg(2, (current->local3));
++		komodo_set_local_reg(3, (current->local4));
++		komodo_set_local_reg(4, (current->local5));
++		komodo_set_local_reg(5, (current->local6));
++		
++		// getnstimeofday(&(current->t0));
++		// printk("%s: t0 = %lld.%.9ld\n", current->comm, (long long)current->t0.tv_sec, current->t0.tv_nsec);
++
++		komodo_enable_all();
++		asm volatile ("nop");
++  }
++  return res;
++  /* PHMon: end */
+ }
+ 
+ SYSCALL_DEFINE5(execveat,
+diff --git a/include/linux/sched.h b/include/linux/sched.h
+index d438e39fffe5..b4b32380ebce 100644
+--- a/include/linux/sched.h
++++ b/include/linux/sched.h
+@@ -68,6 +68,12 @@ struct signal_struct;
+ struct task_delay_info;
+ struct task_group;
+ 
++/* PHMon: begin */
++#ifndef CONFIG_KOMODO
++#define CONFIG_KOMODO
++#endif
++/* PHMon: end */
++
+ /*
+  * Task state bitmask. NOTE! These bits are also
+  * encoded in fs/proc/array.c: get_task_state().
+@@ -718,6 +724,48 @@ struct wake_q_node {
+ 	struct wake_q_node *next;
+ };
+ 
++/* PHMon: begin */
++// Data structure encapsulating everything communicated by one entry
++// in the commit log. This should match the `CommitLog` class from
++// src/main/scala/Varanus.scala.
++struct commit_log_t {
++  unsigned long pc_src;
++  unsigned long pc_dst;
++  unsigned int inst;
++  unsigned int priv;
++  unsigned long rd;
++  unsigned long data;
++};
++
++// Definition of a match on mask that can be used to match a specific
++// commit log. To enable matching of don't cares this requires two
++// masks, "care" and "don't care".
++struct mask_t {
++  struct commit_log_t care;
++  struct commit_log_t dont_care;
++};
++
++//-------------------------------------- Config Unit
++// Data structure encapsulating everything communicated by one entry
++// in the config table. This should match the `ActionConfigTable` class
++// from src/main/scala/ConfigUnit.scala.
++struct act_conf_table_t {
++  unsigned char op_type;
++  unsigned char in1;
++  unsigned char in2;
++  unsigned char fn;
++  unsigned char out;
++  unsigned long data;
++};
++
++struct phmon_info {
++  int index; /* commit index for action */
++  unsigned long action_count; /* number of actions */
++  struct act_conf_table_t action[16]; /* per monitor action list */
++  struct mask_t mu; /* The mu configuration */
++};
++/* PHMon: end */
++
+ struct kmap_ctrl {
+ #ifdef CONFIG_KMAP_LOCAL
+ 	int				idx;
+@@ -1508,6 +1556,23 @@ struct task_struct {
+ 	/* CPU-specific state of this task: */
+ 	struct thread_struct		thread;
+ 
++	/* PHMon: begin */
++	#ifdef CONFIG_KOMODO
++		bool monitor_init; /* indicates whether the monitoring process is initialized for the proc */
++		bool monitor_enable; /* per process monitoring enable flag */
++		bool maintain_state; /* state has been maintened once during context swicht */
++		struct phmon_info info[5]; /* per process monitoring info */
++		unsigned long local1;
++		unsigned long local2;
++		unsigned long local3;
++		unsigned long local4;
++		unsigned long local5;
++		unsigned long local6;
++		// struct timespec t0;
++		// struct timespec t1;
++	#endif
++	/* PHMon: end */
++
+ 	/*
+ 	 * WARNING: on x86, 'thread_struct' contains a variable-sized
+ 	 * structure.  It *MUST* be at the end of 'task_struct'.
+diff --git a/kernel/exit.c b/kernel/exit.c
+index 64c938ce36fe..3ad6e526bf52 100644
+--- a/kernel/exit.c
++++ b/kernel/exit.c
+@@ -71,6 +71,10 @@
+ #include <asm/unistd.h>
+ #include <asm/mmu_context.h>
+ 
++/* PHMon: begin */
++#include <linux/varanus.h>
++/* PHMon: end */
++
+ static void __unhash_process(struct task_struct *p, bool group_dead)
+ {
+ 	nr_threads--;
+@@ -865,6 +869,29 @@ void __noreturn make_task_dead(int signr)
+ 	if (unlikely(!tsk->pid))
+ 		panic("Attempted to kill the idle task!");
+ 
++	/* PHMon: begin */
++    if (current->monitor_init) {
++		unsigned long i = 0;
++		unsigned long varanus_done = 0;
++		
++		current->monitor_init = false;
++    //   getnstimeofday(&(current->t1));
++    //   printk("%s: t1 = %lld.%.9ld\n", current->comm, (long long)current->t1.tv_sec, current->t1.tv_nsec);
++
++    //   current->local1 = komodo_info_sp_offset(0);
++    //   current->local2 = komodo_info_sp_offset(1);
++    //   current->local3 = komodo_info_sp_offset(2);
++    //   current->local4 = komodo_info_sp_offset(3);
++    //   current->local5 = komodo_info_sp_offset(4);
++    //   current->local6 = komodo_info_sp_offset(5);
++    //   printk("Exiting current thread[%s]: local1: 0x%lx local2: 0x%lx local3: 0x%lx local4: 0x%lx local5: 0x%lx local6: 0x%lx\n", current->comm, current->local1, current->local2, current->local3, current->local4, current->local5, current->local6);
++		
++		vm_munmap(current->local1, 10*PAGE_SIZE);
++		
++		komodo_disable_all();
++    }
++    /* PHMon: end */
++
+ 	if (unlikely(in_atomic())) {
+ 		pr_info("note: %s[%d] exited with preempt_count %d\n",
+ 			current->comm, task_pid_nr(current),
+diff --git a/kernel/sched/core.c b/kernel/sched/core.c
+index 9671796a11cc..7b4bffd9412d 100644
+--- a/kernel/sched/core.c
++++ b/kernel/sched/core.c
+@@ -91,6 +91,11 @@
+ #include "../../io_uring/io-wq.h"
+ #include "../smpboot.h"
+ 
++/* PHMon: begin */
++#include <linux/varanus.h>
++#include <linux/delay.h>
++/* PHMon: end */
++
+ /*
+  * Export tracepoints that act as a bare tracehook (ie: have no trace event
+  * associated with them) to allow external modules to probe them.
+@@ -5062,6 +5067,55 @@ static __always_inline struct rq *
+ context_switch(struct rq *rq, struct task_struct *prev,
+ 	       struct task_struct *next, struct rq_flags *rf)
+ {
++	/* PHMon: begin */
++	if (prev->monitor_init) {
++      unsigned long wait_resp = 0, wait_req = 0;
++      komodo_disable_all();
++    
++      // getnstimeofday(&t0);
++      prev->local1 = komodo_info_sp_offset(0);
++      prev->local2 = komodo_info_sp_offset(1);
++      prev->local3 = komodo_info_sp_offset(2);
++      prev->local4 = komodo_info_sp_offset(3);
++      prev->local5 = komodo_info_sp_offset(4);
++      prev->local6 = komodo_info_sp_offset(5);
++      // printk("context switch from prev thread[%s]: local1: 0x%lx local2: 0x%lx local3: 0x%lx\n", prev->comm, prev->local1, prev->local2, prev->local3);
++      
++      // Maintaining the match bits and configuration 
++      int i, j, count = 0;
++      for (i = 0; i < 5; i++) {
++        prev->info[i].mu.care.pc_src = komodo_read_mask(i, e_SM_PC_SRC_CARE);
++        prev->info[i].mu.care.pc_dst = komodo_read_mask(i, e_SM_PC_DST_CARE);
++        prev->info[i].mu.care.inst = komodo_read_mask(i, e_SM_INST_CARE);
++        prev->info[i].mu.care.rd = komodo_read_mask(i, e_SM_RD_CARE);
++        prev->info[i].mu.care.data = komodo_read_mask(0, e_SM_DATA_CARE);
++        prev->info[i].mu.dont_care.pc_src = komodo_read_mask(i, e_SM_PC_SRC_DCARE);
++        prev->info[i].mu.dont_care.pc_dst = komodo_read_mask(i, e_SM_PC_DST_DCARE);
++        prev->info[i].mu.dont_care.inst = komodo_read_mask(i, e_SM_INST_DCARE);
++        prev->info[i].mu.dont_care.rd = komodo_read_mask(i, e_SM_RD_DCARE);
++        prev->info[i].mu.dont_care.data = komodo_read_mask(0, e_SM_DATA_DCARE);
++        prev->info[i].index = komodo_read_commit_index(i);
++        // printk(" Switch from %s: MU[%d]: pc_src.care: 0x%lx pc_src.dcare: 0x%lx pc_dst.care: 0x%lx pc_dst.dcare: 0x%lx inst.care: 0x%lx inst.dcare: 0x%lx rd.care: 0x%lx rd.dcare: 0x%lx date.care: 0x%lx data.dcare: 0x%lx\n", prev->comm, i, prev->info[i].mu.care.pc_src, prev->info[i].mu.dont_care.pc_src, prev->info[i].mu.care.pc_dst, prev->info[i].mu.dont_care.pc_dst, prev->info[i].mu.care.inst, prev->info[i].mu.dont_care.inst, prev->info[i].mu.care.rd, prev->info[i].mu.dont_care.rd, prev->info[i].mu.care.data, prev->info[i].mu.dont_care.data);
++      }
++      
++      for (i = 0; i < 5; i++) {
++        count = komodo_read_conf(i, e_SC_COUNT);
++        // printk("MU[%d] action count: %d\n", i, count);
++        prev->info[i].action_count = count;
++        for (j = 0 ; j < count; j++) {
++          prev->info[i].action[j].op_type = komodo_read_conf(i, e_SC_TYPE);
++          prev->info[i].action[j].in1 = komodo_read_conf(i, e_SC_IN1);
++          prev->info[i].action[j].in2 = komodo_read_conf(i, e_SC_IN2);
++          prev->info[i].action[j].fn = komodo_read_conf(i, e_SC_FN);
++          prev->info[i].action[j].out = komodo_read_conf(i, e_SC_OUT);
++          prev->info[i].action[j].data = komodo_read_conf(i, e_SC_DATA);
++          komodo_read_conf(i, e_SC_DONE);
++          // printk("Switch from: %s ; MU[%d] Conf[%d] op_type: %d in1: %d in2: %d fn: %d out: %d data: 0x%lx \n", prev->comm, i, j, prev->info[i].action[j].op_type, prev->info[i].action[j].in1, prev->info[i].action[j].in2, prev->info[i].action[j].fn, prev->info[i].action[j].out, prev->info[i].action[j].data);
++        }
++      }
++    }
++	/* PHMon: end */
++
+ 	prepare_task_switch(rq, prev, next);
+ 
+ 	/*
+@@ -5113,7 +5167,36 @@ context_switch(struct rq *rq, struct task_struct *prev,
+ 	switch_to(prev, next, prev);
+ 	barrier();
+ 
+-	return finish_task_switch(prev);
++	// return finish_task_switch(prev);
++	/* PHMon: begin */
++    struct rq *rq_ret;
++    rq_ret = finish_task_switch(prev);
++
++    if (current->monitor_init) {
++      /* Write back PHMon's state */
++      komodo_set_local_reg(0, (current->local1));
++      komodo_set_local_reg(1, (current->local2));
++      komodo_set_local_reg(2, (current->local3));
++      komodo_set_local_reg(3, (current->local4));
++      komodo_set_local_reg(4, (current->local5));
++      komodo_set_local_reg(5, (current->local6));
++      // printk("Context swithc to [%s]: local1: 0x%lx local2: 0x%lx local3: 0x%lx local4: 0x%lx local5: 0x%lx local6: 0x%lx\n", current->comm, current->local1, current->local2, current->local3, current->local4, current->local5, current->local6);
++      
++      int i, j, count = 0;
++      for (i = 0; i < 5; i++) {
++        komodo_pattern(i, (mask_t *)(&current->info[i].mu));
++        komodo_set_commit_index(i, current->info[i].index);
++        count = current->info[i].action_count;
++        for (j = 0; j < count; j++) {
++          komodo_action_config(i, (act_conf_table_t *) (&current->info[i].action[count-j-1]));
++          // printk("Switch to: %s ; MU[%d] Conf[%d] op_type: %d in1: %d in2: %d fn: %d out: %d data: 0x%lx \n", current->comm, i, j, current->info[i].action[j].op_type, current->info[i].action[j].in1, current->info[i].action[j].in2, current->info[i].action[j].fn, current->info[i].action[j].out, current->info[i].action[j].data);
++        }
++      }
++      
++    komodo_enable_all();
++	}
++    return rq_ret;
++    /* PHMon: end */
+ }
+ 
+ /*

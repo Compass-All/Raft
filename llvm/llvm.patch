@@ -1,0 +1,235 @@
+diff --git a/llvm/lib/Target/RISCV/CMakeLists.txt b/llvm/lib/Target/RISCV/CMakeLists.txt
+index c4f3d3124d29..dd0ace1374d6 100644
+--- a/llvm/lib/Target/RISCV/CMakeLists.txt
++++ b/llvm/lib/Target/RISCV/CMakeLists.txt
+@@ -38,6 +38,11 @@ add_llvm_target(RISCVCodeGen
+   RISCVTargetMachine.cpp
+   RISCVTargetObjectFile.cpp
+   RISCVTargetTransformInfo.cpp
++  RISCVMachineInstrPrinter.cpp
++  RISCVCoprocessor.cpp
++  RISCVStackBase.cpp
++  RISCVIOinst.cpp
++  RISCVInputTaint.cpp
+ 
+   LINK_COMPONENTS
+   Analysis
+diff --git a/llvm/lib/Target/RISCV/RISCV.h b/llvm/lib/Target/RISCV/RISCV.h
+index 2538d9992de7..979166ec5318 100644
+--- a/llvm/lib/Target/RISCV/RISCV.h
++++ b/llvm/lib/Target/RISCV/RISCV.h
+@@ -49,6 +49,21 @@ void initializeRISCVExpandAtomicPseudoPass(PassRegistry &);
+ FunctionPass *createRISCVCleanupVSETVLIPass();
+ void initializeRISCVCleanupVSETVLIPass(PassRegistry &);
+ 
++FunctionPass *createRISCVMachineInstrPrinter();
++void initializeRISCVMachineInstrPrinterPass(PassRegistry &);
++
++FunctionPass *createRISCVCoprocessor();
++void initializeRISCVCoprocessorPass(PassRegistry &);
++
++FunctionPass *createRISCVStackBase();
++void initializeRISCVStackBasePass(PassRegistry &);
++
++FunctionPass *createRISCVIOinst();
++void initializeRISCVIOinstPass(PassRegistry &);
++
++FunctionPass *createRISCVInputTaint();
++void initializeRISCVInputTaintPass(PassRegistry &);
++
+ InstructionSelector *createRISCVInstructionSelector(const RISCVTargetMachine &,
+                                                     RISCVSubtarget &,
+                                                     RISCVRegisterBankInfo &);
+diff --git a/llvm/lib/Target/RISCV/RISCVInstrFormats.td b/llvm/lib/Target/RISCV/RISCVInstrFormats.td
+index 7be74b79d99b..8b5a1dd66be7 100644
+--- a/llvm/lib/Target/RISCV/RISCVInstrFormats.td
++++ b/llvm/lib/Target/RISCV/RISCVInstrFormats.td
+@@ -132,6 +132,14 @@ def OPC_BRANCH    : RISCVOpcode<0b1100011>;
+ def OPC_JALR      : RISCVOpcode<0b1100111>;
+ def OPC_JAL       : RISCVOpcode<0b1101111>;
+ def OPC_SYSTEM    : RISCVOpcode<0b1110011>;
++def OPC_TAINT     : RISCVOpcode<0b0101011>;
++def OPC_SRC       : RISCVOpcode<0b0101011>;
++def OPC_CLOSE     : RISCVOpcode<0b0101011>;
++def OPC_OPEN      : RISCVOpcode<0b0101011>;
++def OPC_BASE      : RISCVOpcode<0b0101011>;
++def OPC_ARG       : RISCVOpcode<0b0101011>;
++def OPC_LENTH     : RISCVOpcode<0b0101011>;
++def OPC_SINK      : RISCVOpcode<0b0101011>;
+ 
+ class RVInst<dag outs, dag ins, string opcodestr, string argstr,
+              list<dag> pattern, InstFormat format>
+diff --git a/llvm/lib/Target/RISCV/RISCVInstrInfo.td b/llvm/lib/Target/RISCV/RISCVInstrInfo.td
+index a07b589e77fb..8b794e95fe57 100644
+--- a/llvm/lib/Target/RISCV/RISCVInstrInfo.td
++++ b/llvm/lib/Target/RISCV/RISCVInstrInfo.td
+@@ -1261,6 +1261,62 @@ def : Pat<(debugtrap), (EBREAK)>;
+ // Standard extensions
+ //===----------------------------------------------------------------------===//
+ 
++let hasSideEffects = 0 , mayLoad = 0, mayStore = 0 in
++def taint : RVInstR<0b0001100, 0b111, OPC_TAINT, (outs),
++                         (ins GPR:$rs1, GPR:$rs2),
++                         "taint", "$rs1, $rs2">, Sched<[]> {
++  let rd = 0;
++}
++
++let hasSideEffects = 0 , mayLoad = 0, mayStore = 0 in
++def src : RVInstR<0b0010100, 0b111, OPC_SRC, (outs),
++                         (ins GPR:$rs1, GPR:$rs2),
++                         "src", "$rs1, $rs2">, Sched<[]> {
++  let rd = 0;
++}
++
++let hasSideEffects = 0 , mayLoad = 0, mayStore = 0 in
++def close : RVInstR<0b0010101, 0b111, OPC_CLOSE, (outs),
++                         (ins GPR:$rs1, GPR:$rs2),
++                         "close", "$rs1, $rs2">, Sched<[]> {
++  let rd = 0;
++}
++
++let hasSideEffects = 0 , mayLoad = 0, mayStore = 0 in
++def open : RVInstR<0b0010110, 0b111, OPC_OPEN, (outs),
++                         (ins GPR:$rs1, GPR:$rs2),
++                         "open", "$rs1, $rs2">, Sched<[]> {
++  let rd = 0;
++}
++
++let hasSideEffects = 0 , mayLoad = 0, mayStore = 0 in
++def base : RVInstR<0b0010111, 0b111, OPC_BASE, (outs),
++                         (ins GPR:$rs1, GPR:$rs2),
++                         "base", "$rs1, $rs2">, Sched<[]> {
++  let rd = 0;
++}
++
++let hasSideEffects = 0 , mayLoad = 0, mayStore = 0 in
++def arg : RVInstR<0b0011000, 0b111, OPC_ARG, (outs),
++                         (ins GPR:$rs1, GPR:$rs2),
++                         "arg", "$rs1, $rs2">, Sched<[]> {
++  let rd = 0;
++}
++
++let hasSideEffects = 0 , mayLoad = 0, mayStore = 0 in
++def lenth : RVInstR<0b0011001, 0b111, OPC_LENTH, (outs),
++                         (ins GPR:$rs1, GPR:$rs2),
++                         "lenth", "$rs1, $rs2">, Sched<[]> {
++  let rd = 0;
++}
++
++let hasSideEffects = 0 , mayLoad = 0, mayStore = 0 in
++def sink : RVInstR<0b0011010, 0b111, OPC_SINK, (outs),
++                         (ins GPR:$rs1, GPR:$rs2),
++                         "sink", "$rs1, $rs2">, Sched<[]> {
++  let rd = 0;
++}
++
+ include "RISCVInstrInfoM.td"
+ include "RISCVInstrInfoA.td"
+ include "RISCVInstrInfoF.td"
+diff --git a/llvm/lib/Target/RISCV/RISCVInstrInfoVPseudos.td b/llvm/lib/Target/RISCV/RISCVInstrInfoVPseudos.td
+index 5c228820f0cc..60bd1b24cab8 100644
+--- a/llvm/lib/Target/RISCV/RISCVInstrInfoVPseudos.td
++++ b/llvm/lib/Target/RISCV/RISCVInstrInfoVPseudos.td
+@@ -3909,10 +3909,10 @@ foreach vti = AllIntegerVectors in {
+                                                                (DecImm simm5_plus1:$rs2),
+                                                                GPR:$vl,
+                                                                vti.SEW)>;
+-  def : Pat<(vti.Mask (int_riscv_vmslt_mask (vti.Mask VR:$merge),
++  def : Pat<(vti.Mask (int_riscv_vmslt_mask (vti.Mask V0),
+                                             (vti.Vector vti.RegClass:$rs1),
+                                             (vti.Scalar simm5_plus1:$rs2),
+-                                            (vti.Mask V0),
++                                            (vti.Mask VR:$merge),
+                                             (XLenVT (VLOp GPR:$vl)))),
+             (!cast<Instruction>("PseudoVMSLE_VI_"#vti.LMul.MX#"_MASK")
+                                                       VR:$merge,
+@@ -3922,17 +3922,17 @@ foreach vti = AllIntegerVectors in {
+                                                       GPR:$vl,
+                                                       vti.SEW)>;
+ 
+-  def : Pat<(vti.Mask (int_riscv_vmsltu (vti.Vector vti.RegClass:$rs1),
++ def : Pat<(vti.Mask (int_riscv_vmsltu (vti.Vector vti.RegClass:$rs1),
+                                         (vti.Scalar simm5_plus1:$rs2),
+                                         (XLenVT (VLOp GPR:$vl)))),
+             (!cast<Instruction>("PseudoVMSLEU_VI_"#vti.LMul.MX) vti.RegClass:$rs1,
+                                                                 (DecImm simm5_plus1:$rs2),
+                                                                 GPR:$vl,
+                                                                 vti.SEW)>;
+-  def : Pat<(vti.Mask (int_riscv_vmsltu_mask (vti.Mask VR:$merge),
++  def : Pat<(vti.Mask (int_riscv_vmsltu_mask (vti.Mask V0),
+                                              (vti.Vector vti.RegClass:$rs1),
+                                              (vti.Scalar simm5_plus1:$rs2),
+-                                             (vti.Mask V0),
++                                             (vti.Mask VR:$merge),
+                                              (XLenVT (VLOp GPR:$vl)))),
+             (!cast<Instruction>("PseudoVMSLEU_VI_"#vti.LMul.MX#"_MASK")
+                                                       VR:$merge,
+@@ -3950,11 +3950,11 @@ foreach vti = AllIntegerVectors in {
+                                                                vti.RegClass:$rs1,
+                                                                GPR:$vl,
+                                                                vti.SEW)>;
+-  def : Pat<(vti.Mask (int_riscv_vmsltu_mask (vti.Mask VR:$merge),
+-                                             (vti.Vector vti.RegClass:$rs1),
+-                                             (vti.Scalar 0),
+-                                             (vti.Mask V0),
+-                                             (XLenVT (VLOp GPR:$vl)))),
++  def : Pat<(vti.Mask (int_riscv_vmsltu_mask (vti.Mask V0),
++                                            (vti.Vector vti.RegClass:$rs1),
++                                            (vti.Scalar 0),
++                                            (vti.Mask VR:$merge),
++                                            (XLenVT (VLOp GPR:$vl)))),
+             (!cast<Instruction>("PseudoVMSNE_VV_"#vti.LMul.MX#"_MASK")
+                                                      VR:$merge,
+                                                      vti.RegClass:$rs1,
+diff --git a/llvm/lib/Target/RISCV/RISCVRegisterInfo.td b/llvm/lib/Target/RISCV/RISCVRegisterInfo.td
+index e1a11fd9389f..4b52edacc319 100644
+--- a/llvm/lib/Target/RISCV/RISCVRegisterInfo.td
++++ b/llvm/lib/Target/RISCV/RISCVRegisterInfo.td
+@@ -10,6 +10,7 @@
+ //  Declarations that describe the RISC-V register files
+ //===----------------------------------------------------------------------===//
+ 
++
+ let Namespace = "RISCV" in {
+ class RISCVReg<bits<5> Enc, string n, list<string> alt = []> : Register<n> {
+   let HWEncoding{4-0} = Enc;
+@@ -115,9 +116,11 @@ let RegAltNameIndices = [ABIRegAltName] in {
+   }
+ }
+ 
++
+ def XLenVT : ValueTypeByHwMode<[RV32, RV64],
+                                [i32,  i64]>;
+ 
++
+ // The order of registers represents the preferred allocation sequence.
+ // Registers are listed in the order caller-save, callee-save, specials.
+ def GPR : RegisterClass<"RISCV", [XLenVT], 32, (add
+diff --git a/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp b/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp
+index 32fb7cd6753c..4e348558eebd 100644
+--- a/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp
++++ b/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp
+@@ -40,6 +40,11 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeRISCVTarget() {
+   initializeRISCVMergeBaseOffsetOptPass(*PR);
+   initializeRISCVExpandPseudoPass(*PR);
+   initializeRISCVCleanupVSETVLIPass(*PR);
++  initializeRISCVMachineInstrPrinterPass(*PR);
++  initializeRISCVCoprocessorPass(*PR);
++  initializeRISCVStackBasePass(*PR);
++  initializeRISCVIOinstPass(*PR);
++  initializeRISCVInputTaintPass(*PR);
+ }
+ 
+ static StringRef computeDataLayout(const Triple &TT) {
+@@ -188,6 +193,11 @@ void RISCVPassConfig::addPreEmitPass2() {
+   // possibility for other passes to break the requirements for forward
+   // progress in the LR/SC block.
+   addPass(createRISCVExpandAtomicPseudoPass());
++  addPass(createRISCVMachineInstrPrinter());
++  addPass(createRISCVStackBase());
++  addPass(createRISCVIOinst());
++  addPass(createRISCVInputTaint());
++  addPass(createRISCVCoprocessor());
+ }
+ 
+ void RISCVPassConfig::addPreRegAlloc() {

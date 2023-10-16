@@ -1,0 +1,345 @@
+diff --git a/src/main/scala/devices/debug/DMI.scala b/src/main/scala/devices/debug/DMI.scala
+index 67164fb43..43a7f50c6 100644
+--- a/src/main/scala/devices/debug/DMI.scala
++++ b/src/main/scala/devices/debug/DMI.scala
+@@ -69,7 +69,7 @@ class DMIIO(implicit val p: Parameters) extends ParameterizedBundle()(p) {
+ class ClockedDMIIO(implicit val p: Parameters) extends ParameterizedBundle()(p){
+   val dmi      = new DMIIO()(p)
+   val dmiClock = Output(Clock())
+-  val dmiReset = Output(Reset())
++  val dmiReset = Output(Bool())
+ }
+ 
+ /** Convert DMI to TL. Avoids using special DMI synchronizers and register accesses
+diff --git a/src/main/scala/devices/debug/DebugTransport.scala b/src/main/scala/devices/debug/DebugTransport.scala
+index 65856c2c1..9efac7231 100644
+--- a/src/main/scala/devices/debug/DebugTransport.scala
++++ b/src/main/scala/devices/debug/DebugTransport.scala
+@@ -63,7 +63,7 @@ class DTMInfo extends Bundle {
+ /** A wrapper around JTAG providing a reset signal and manufacturer id. */
+ class SystemJTAGIO extends Bundle {
+   val jtag = Flipped(new JTAGIO(hasTRSTn = false))
+-  val reset = Input(Reset())
++  val reset = Input(Bool())
+   val mfr_id = Input(UInt(11.W))
+   val part_number = Input(UInt(16.W))
+   val version = Input(UInt(4.W))
+diff --git a/src/main/scala/devices/debug/Periphery.scala b/src/main/scala/devices/debug/Periphery.scala
+index 3aca36ad2..fa4a4ba49 100644
+--- a/src/main/scala/devices/debug/Periphery.scala
++++ b/src/main/scala/devices/debug/Periphery.scala
+@@ -44,7 +44,7 @@ class ClockedAPBBundle(params: APBBundleParameters) extends APBBundle(params) {
+ 
+ class DebugIO(implicit val p: Parameters) extends Bundle {
+   val clock = Input(Clock())
+-  val reset = Input(Reset())
++  val reset = Input(Bool())
+   val clockeddmi = p(ExportDebug).dmi.option(Flipped(new ClockedDMIIO()))
+   val systemjtag = p(ExportDebug).jtag.option(new SystemJTAGIO)
+   val apb = p(ExportDebug).apb.option(Flipped(new ClockedAPBBundle(APBBundleParameters(addrBits=12, dataBits=32))))
+@@ -170,7 +170,7 @@ trait HasPeripheryDebugModuleImp extends LazyModuleImp {
+     outer.debugOpt.map { outerdebug => 
+       outerdebug.module.io.dmi.get.dmi <> dtm.io.dmi
+       outerdebug.module.io.dmi.get.dmiClock := sj.jtag.TCK
+-      outerdebug.module.io.dmi.get.dmiReset := sj.reset
++      outerdebug.module.io.dmi.get.dmiReset := sj.reset.asBool
+     }
+     dtm
+   }
+diff --git a/src/main/scala/rocket/CSR.scala b/src/main/scala/rocket/CSR.scala
+index beaa79723..dac711907 100644
+--- a/src/main/scala/rocket/CSR.scala
++++ b/src/main/scala/rocket/CSR.scala
+@@ -366,6 +366,9 @@ class CSRFile(
+   val reset_mstatus = Wire(init=new MStatus().fromBits(0))
+   reset_mstatus.mpp := PRV.M
+   reset_mstatus.prv := PRV.M
++  /* PHMon: begin */
++  reset_mstatus.sum := Bool(true)
++  /* PHMon: end */
+   reset_mstatus.xs := (if (usingRoCC) UInt(3) else UInt(0))
+   val reg_mstatus = Reg(init=reset_mstatus)
+ 
+@@ -711,7 +714,10 @@ class CSRFile(
+     read_sstatus.uxl := io.status.uxl
+     read_sstatus.sd_rv32 := io.status.sd_rv32
+     read_sstatus.mxr := io.status.mxr
+-    read_sstatus.sum := io.status.sum
++    // read_sstatus.sum := io.status.sum
++    /* PHMon: begin */
++    read_sstatus.sum := Bool(true)
++    /* PHMon: end */
+     read_sstatus.xs := io.status.xs
+     read_sstatus.fs := io.status.fs
+     read_sstatus.vs := io.status.vs
+@@ -1167,7 +1173,10 @@ class CSRFile(
+         }
+         if (usingVM) {
+           reg_mstatus.mxr := new_mstatus.mxr
+-          reg_mstatus.sum := new_mstatus.sum
++          // reg_mstatus.sum := new_mstatus.sum
++          /* PHMon: begin */
++          reg_mstatus.sum := Bool(true)
++          /* PHMon: end */
+           reg_mstatus.tvm := new_mstatus.tvm
+         }
+         if (usingHypervisor) {
+@@ -1268,7 +1277,10 @@ class CSRFile(
+         reg_mstatus.vs := formVS(new_sstatus.vs)
+         if (usingVM) {
+           reg_mstatus.mxr := new_sstatus.mxr
+-          reg_mstatus.sum := new_sstatus.sum
++          // reg_mstatus.sum := new_sstatus.sum
++          /* PHMon: begin */
++          reg_mstatus.sum := Bool(true)
++          /* PHMon: end */
+         }
+       }
+       when (decoded_addr(CSRs.sip)) {
+diff --git a/src/main/scala/rocket/HellaCache.scala b/src/main/scala/rocket/HellaCache.scala
+index ea0e3196b..2c50c226f 100644
+--- a/src/main/scala/rocket/HellaCache.scala
++++ b/src/main/scala/rocket/HellaCache.scala
+@@ -118,6 +118,9 @@ trait HasCoreData extends HasCoreParameters {
+ 
+ class HellaCacheReqInternal(implicit p: Parameters) extends CoreBundle()(p) with HasCoreMemOp {
+   val phys = Bool()
++  /* PHMon: begin */
++  val valid_req = Bool()
++  /* PHMon: end */
+   val no_alloc = Bool()
+   val no_xcpt = Bool()
+ }
+@@ -132,6 +135,9 @@ class HellaCacheResp(implicit p: Parameters) extends CoreBundle()(p)
+   val data_word_bypass = Bits(width = coreDataBits)
+   val data_raw = Bits(width = coreDataBits)
+   val store_data = Bits(width = coreDataBits)
++  /* PHMon: begin */
++  val s2_xcpt_else = Bool()
++  /* PHMon: end */
+ }
+ 
+ class AlignmentExceptions extends Bundle {
+@@ -180,6 +186,9 @@ class HellaCacheIO(implicit p: Parameters) extends CoreBundle()(p) {
+   val uncached_resp = tileParams.dcache.get.separateUncachedResp.option(Decoupled(new HellaCacheResp).flip)
+   val ordered = Bool(INPUT)
+   val perf = new HellaCachePerfEvents().asInput
++  /* PHMon: begin */
++  val assertion = Bool(INPUT)
++  /* PHMon: end */
+ 
+   val keep_clock_enabled = Bool(OUTPUT) // should D$ avoid clock-gating itself?
+   val clock_enabled = Bool(INPUT) // is D$ currently being clocked?
+diff --git a/src/main/scala/rocket/HellaCacheArbiter.scala b/src/main/scala/rocket/HellaCacheArbiter.scala
+index 5a4510ec1..5201a0862 100644
+--- a/src/main/scala/rocket/HellaCacheArbiter.scala
++++ b/src/main/scala/rocket/HellaCacheArbiter.scala
+@@ -70,6 +70,9 @@ class HellaCacheArbiter(n: Int)(implicit p: Parameters) extends Module
+       io.requestor(i).clock_enabled := io.mem.clock_enabled
+       resp.bits := io.mem.resp.bits
+       resp.bits.tag := io.mem.resp.bits.tag >> log2Up(n)
++      /* PHMon: begin */
++      resp.bits.s2_xcpt_else := (io.mem.s2_xcpt.ae.st || io.mem.s2_xcpt.ae.ld) && s2_id =/= UInt(1)
++      /* PHMon: end */
+ 
+       io.requestor(i).replay_next := io.mem.replay_next
+ 
+diff --git a/src/main/scala/rocket/RocketCore.scala b/src/main/scala/rocket/RocketCore.scala
+index 90896d37a..fdcba2fa0 100644
+--- a/src/main/scala/rocket/RocketCore.scala
++++ b/src/main/scala/rocket/RocketCore.scala
+@@ -258,6 +258,13 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
+ 
+   val take_pc_mem_wb = take_pc_wb || take_pc_mem
+   val take_pc = take_pc_mem_wb
++  /* PHMon: begin */
++  val intr_dec = Reg(Bool())
++  val intr_ex = Reg(Bool())
++  val intr_mem = Reg(Bool())
++  val intr_wb = Reg(Bool())
++  val intr_replay = Reg(Bool())
++  /* PHMon: end */
+ 
+   // decode stage
+   val ibuf = Module(new IBuf)
+@@ -438,6 +445,10 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
+   ex_reg_replay := !take_pc && ibuf.io.inst(0).valid && ibuf.io.inst(0).bits.replay
+   ex_reg_xcpt := !ctrl_killd && id_xcpt
+   ex_reg_xcpt_interrupt := !take_pc && ibuf.io.inst(0).valid && csr.io.interrupt
++  /* PHMon: begin */
++  intr_dec := csr.io.interrupt && io.rocc.interrupt
++  intr_ex := ex_reg_xcpt_interrupt && intr_dec
++  /* PHMon: end */
+ 
+   when (!ctrl_killd) {
+     ex_ctrl := id_ctrl
+@@ -545,6 +556,10 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
+   mem_reg_xcpt := !ctrl_killx && ex_xcpt
+   mem_reg_xcpt_interrupt := !take_pc_mem_wb && ex_reg_xcpt_interrupt
+ 
++  /* PHMon: begin */
++  intr_mem := mem_reg_xcpt_interrupt && intr_ex
++  /* PHMon: end */
++
+   // on pipeline flushes, cause mem_npc to hold the sequential npc, which
+   // will drive the W-stage npc mux
+   when (mem_reg_valid && mem_reg_flush_pipe) {
+@@ -632,6 +647,11 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
+ 
+   }
+ 
++  /* PHMon: begin */
++  intr_wb := wb_reg_xcpt && intr_mem
++  intr_replay := (intr_dec && !ex_reg_xcpt_interrupt) || (intr_ex && !mem_reg_xcpt_interrupt) || (intr_mem && !wb_reg_xcpt)
++  /* PHMon: end */
++
+   val (wb_xcpt, wb_cause) = checkExceptions(List(
+     (wb_reg_xcpt,  wb_reg_cause),
+     (wb_reg_valid && wb_ctrl.mem && io.dmem.s2_xcpt.pf.st, UInt(Causes.store_page_fault)),
+@@ -897,12 +917,34 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
+   io.dmem.keep_clock_enabled := ibuf.io.inst(0).valid && id_ctrl.mem && !csr.io.csr_stall
+ 
+   io.rocc.cmd.valid := wb_reg_valid && wb_ctrl.rocc && !replay_wb_common
+-  io.rocc.exception := wb_xcpt && csr.io.status.xs.orR
++  // io.rocc.exception := wb_xcpt && csr.io.status.xs.orR
++  /* PHMon: begin */
++  io.rocc.exception := (wb_xcpt || RegNext(wb_reg_xcpt)) && csr.io.status.xs.orR
++  /* PHMon: end */
+   io.rocc.cmd.bits.status := csr.io.status
+   io.rocc.cmd.bits.inst := new RoCCInstruction().fromBits(wb_reg_inst)
+   io.rocc.cmd.bits.rs1 := wb_reg_wdata
+   io.rocc.cmd.bits.rs2 := wb_reg_rs2
+ 
++  /* PHMon: begin */
++  io.rocc.commitLog.valid := wb_valid
++  io.rocc.commitLog.bits.pc_src := wb_reg_pc
++  io.rocc.commitLog.bits.pc_dst := RegNext(mem_npc)
++  io.rocc.commitLog.bits.inst := wb_reg_inst
++  io.rocc.commitLog.bits.in1bits := Reg(next=Reg(next=ex_rs(1)))
++  io.rocc.commitLog.bits.in2bits := Reg(next=Reg(next=ex_rs(0)))
++  val wb_reg_paddr = Reg(Bits())
++  when(io.dmem.resp.valid )
++  {
++    wb_reg_paddr:=io.dmem.resp.bits.addr
++  }
++  io.rocc.commitLog.bits.addr := wb_reg_paddr
++  io.rocc.commitLog.bits.data := rf_wdata
++  io.rocc.commitLog.bits.is_compressed := RegNext(RegNext(RegNext(ibuf.io.inst(0).bits.rvc)))
++  io.rocc.commitLog.bits.priv := csr.io.status.prv
++  io.rocc.commitLog.bits.interrupt_replay := intr_replay
++  /* PHMon: end */
++
+   // gate the clock
+   val unpause = csr.io.time(rocketParams.lgPauseCycles-1, 0) === 0 || csr.io.inhibit_cycle || io.dmem.perf.release || take_pc
+   when (unpause) { id_reg_pause := false }
+diff --git a/src/main/scala/rocket/SimpleHellaCacheIF.scala b/src/main/scala/rocket/SimpleHellaCacheIF.scala
+index 956aa1de4..71b519c9f 100644
+--- a/src/main/scala/rocket/SimpleHellaCacheIF.scala
++++ b/src/main/scala/rocket/SimpleHellaCacheIF.scala
+@@ -127,10 +127,17 @@ class SimpleHellaCacheIF(implicit p: Parameters) extends Module
+   io.cache.s1_data.data := RegEnable(req_arb.io.out.bits.data, s0_req_fire)
+   io.cache.s2_kill := false.B
+ 
+-  replayq.io.nack.valid := io.cache.s2_nack && s2_req_fire
++  // replayq.io.nack.valid := io.cache.s2_nack && s2_req_fire
++  /* PHMon: begin */
++  replayq.io.nack.valid := ((io.cache.s2_nack || io.cache.s2_kill) && s2_req_fire) || (io.requestor.req.bits.valid_req)
++  /* PHMon: end */
+   replayq.io.nack.bits := s2_req_tag
+   replayq.io.resp := io.cache.resp
+   io.requestor.resp := io.cache.resp
+ 
+-  assert(!s2_req_fire || !io.cache.s2_xcpt.asUInt.orR, "SimpleHellaCacheIF exception")
++  // assert(!s2_req_fire || !io.cache.s2_xcpt.asUInt.orR, "SimpleHellaCacheIF exception")
++  /* PHMon: begin */
++  io.requestor.assertion := RegNext(RegNext(io.cache.req.fire())) && io.cache.s2_xcpt.asUInt.orR && !io.cache.resp.bits.s2_xcpt_else
++  io.requestor.s2_xcpt := io.cache.s2_xcpt
++  /* PHMon: end */
+ }
+diff --git a/src/main/scala/system/Configs.scala b/src/main/scala/system/Configs.scala
+index fdc8a87b4..98a1241ed 100644
+--- a/src/main/scala/system/Configs.scala
++++ b/src/main/scala/system/Configs.scala
+@@ -21,7 +21,15 @@ class BaseConfig extends Config(
+   new BaseSubsystemConfig()
+ )
+ 
+-class DefaultConfig extends Config(new WithNBigCores(1) ++ new WithCoherentBusTopology ++ new BaseConfig)
++class DefaultConfig extends Config(
++  /* PHMon: begin */
++  new WithExtMemSize(0x40000000) ++ 
++  new KomodoBaseConfig ++
++  /* PHMon: end */
++  new WithNBigCores(1) ++ 
++  new WithCoherentBusTopology ++ 
++  new BaseConfig
++)
+ 
+ class DefaultBufferlessConfig extends Config(new WithBufferlessBroadcastHub ++ new DefaultConfig)
+ class DefaultSmallConfig extends Config(new WithNSmallCores(1) ++ new WithCoherentBusTopology ++ new BaseConfig)
+diff --git a/src/main/scala/tile/LazyRoCC.scala b/src/main/scala/tile/LazyRoCC.scala
+index ae36dcc59..af130c6e0 100644
+--- a/src/main/scala/tile/LazyRoCC.scala
++++ b/src/main/scala/tile/LazyRoCC.scala
+@@ -45,6 +45,9 @@ class RoCCCoreIO(implicit p: Parameters) extends CoreBundle()(p) {
+   val busy = Output(Bool())
+   val interrupt = Output(Bool())
+   val exception = Input(Bool())
++  /* PHMon: begin */
++  val commitLog = Flipped(Decoupled(new CommitLog))
++  /* PHMon: end */
+ }
+ 
+ class RoCCIO(val nPTWPorts: Int)(implicit p: Parameters) extends RoCCCoreIO()(p) {
+@@ -83,9 +86,13 @@ trait HasLazyRoCC extends CanHavePTW { this: BaseTile =>
+ trait HasLazyRoCCModule extends CanHavePTWModule
+     with HasCoreParameters { this: RocketTileModuleImp with HasFpuOpt =>
+ 
+-  val (respArb, cmdRouter) = if(outer.roccs.nonEmpty) {
++  // val (respArb, cmdRouter) = if(outer.roccs.nonEmpty) {
++  val (respArb, cmdRouter, roccCore) = if(outer.roccs.nonEmpty) {
+     val respArb = Module(new RRArbiter(new RoCCResponse()(outer.p), outer.roccs.size))
+     val cmdRouter = Module(new RoccCommandRouter(outer.roccs.map(_.opcodes))(outer.p))
++    /* PHMon: begin */
++    val roccCore =  Wire(Flipped(Decoupled(new CommitLog)))
++    /* PHMon: end */
+     outer.roccs.zipWithIndex.foreach { case (rocc, i) =>
+       rocc.module.io.ptw ++=: ptwPorts
+       rocc.module.io.cmd <> cmdRouter.io.out(i)
+@@ -93,6 +100,9 @@ trait HasLazyRoCCModule extends CanHavePTWModule
+       dcIF.io.requestor <> rocc.module.io.mem
+       dcachePorts += dcIF.io.cache
+       respArb.io.in(i) <> Queue(rocc.module.io.resp)
++      /* PHMon: begin */
++      rocc.module.io.commitLog <> roccCore
++      /* PHMon: end */
+     }
+ 
+     fpuOpt foreach { fpu =>
+@@ -111,9 +121,10 @@ trait HasLazyRoCCModule extends CanHavePTWModule
+         fpu.io.cp_resp.ready := false.B
+       }
+     }
+-    (Some(respArb), Some(cmdRouter))
++    // (Some(respArb), Some(cmdRouter))
++    (Some(respArb), Some(cmdRouter), Some(roccCore))
+   } else {
+-    (None, None)
++    (None, None, None)
+   }
+ }
+ 
+diff --git a/src/main/scala/tile/RocketTile.scala b/src/main/scala/tile/RocketTile.scala
+index 619c9debd..84704aab5 100644
+--- a/src/main/scala/tile/RocketTile.scala
++++ b/src/main/scala/tile/RocketTile.scala
+@@ -170,6 +170,9 @@ class RocketTileModuleImp(outer: RocketTile) extends BaseTileModuleImp(outer)
+     core.io.rocc.resp <> respArb.get.io.out
+     core.io.rocc.busy <> (cmdRouter.get.io.busy || outer.roccs.map(_.module.io.busy).reduce(_ || _))
+     core.io.rocc.interrupt := outer.roccs.map(_.module.io.interrupt).reduce(_ || _)
++    /* PHMon: begin */
++    roccCore.get <> core.io.rocc.commitLog
++    /* PHMon: end */
+   }
+ 
+   // Rocket has higher priority to DTIM than other TileLink clients
